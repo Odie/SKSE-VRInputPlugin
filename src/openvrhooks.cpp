@@ -396,7 +396,40 @@ public:
 	* is invalid. This function is deprecated in favor of the new IVRInput system. */
 	virtual bool GetControllerState(vr::TrackedDeviceIndex_t unControllerDeviceIndex, vr::VRControllerState_t *pControllerState, uint32_t unControllerStateSize)
 	{
-		return m_system->GetControllerState(unControllerDeviceIndex, pControllerState, unControllerStateSize);
+		const int controllerCount = 2;
+		static vr::VRControllerState_t lastControllerState[controllerCount];
+		static bool shutoffStateUpdate = false;
+		
+		// We're only watching the first two controllers (presumably the VR wands)
+		// If the game requested access to anything else, just let it through.
+		if(unControllerDeviceIndex > controllerCount)
+			return m_system->GetControllerState(unControllerDeviceIndex, pControllerState, sizeof(vr::VRControllerState_t));
+		
+		vr::VRControllerState_t* lastState = &lastControllerState[unControllerDeviceIndex - 1];
+		vr::VRControllerState_t curState;
+
+		// Grab the state of the controller
+		bool result = m_system->GetControllerState(unControllerDeviceIndex, &curState, sizeof(vr::VRControllerState_t));
+
+		// Check if we should toggle the shutoff flag
+		uint64_t buttonMask = vr::ButtonMaskFromId(k_EButton_SteamVR_Touchpad);
+
+		if (lastState->unPacketNum != curState.unPacketNum &&
+			(lastState->ulButtonPressed & buttonMask) && !(curState.ulButtonPressed & buttonMask) &&
+			unControllerDeviceIndex == GetTrackedDeviceIndexForControllerRole(vr::ETrackedControllerRole::TrackedControllerRole_LeftHand)) {
+			// Toggle the update shutoff flag
+			shutoffStateUpdate = !shutoffStateUpdate;
+			_MESSAGE("toggle! %d", unControllerDeviceIndex);
+		}
+		
+		// Give the game access to the controller depending on the shutoff flag
+		if (!shutoffStateUpdate)
+			memcpy(pControllerState, &curState, sizeof(vr::VRControllerState_t));
+
+		// curState = lastState
+		memcpy(lastState, &curState, sizeof(vr::VRControllerState_t));
+
+		return result;
 	}
 
 	/** fills the supplied struct with the current state of the controller and the provided pose with the pose of
