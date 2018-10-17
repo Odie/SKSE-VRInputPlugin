@@ -6,6 +6,7 @@
 #include "skse64/ScaleformCallbacks.h"
 #include <list>
 #include "openvrhooks.h"
+#include <time.h>
 
 namespace ScaleformVR
 {
@@ -58,25 +59,32 @@ namespace ScaleformVR
 			GFxValue* object = &(*iter).object;
 			const char* methodName = (*iter).methodName;
 
-			GFxValue result, args[5];
-			args[0].SetNumber(controllerHand);
-			args[1].SetNumber(controllerState.unPacketNum);
-			args[2].SetNumber(controllerState.ulButtonPressed);
-			args[3].SetNumber(controllerState.ulButtonTouched);
+			UInt64 highmask = 0xFFFFFFFF00000000;
+			UInt64 lowmask = 0x00000000FFFFFFFF;
 
-			GFxValue axisData;
-			movieView->CreateArray(&args[4]);
+			GFxValue result, args[8];
+			args[0].SetNumber(clock());
+			args[1].SetNumber(controllerHand);
+			args[2].SetNumber(controllerState.unPacketNum);
+
+			args[3].SetNumber(controllerState.ulButtonPressed & lowmask);
+			args[4].SetNumber((controllerState.ulButtonPressed & highmask)>>32);
+			
+			args[5].SetNumber(controllerState.ulButtonTouched & lowmask);
+			args[6].SetNumber((controllerState.ulButtonTouched & highmask)>>32);
+
+			movieView->CreateArray(&args[7]);
 
 			for (int i=0; i < vr::k_unControllerStateAxisCount; i++) {
 				GFxValue x, y;
 				x.SetNumber(controllerState.rAxis[i].x);
 				y.SetNumber(controllerState.rAxis[i].y);
 
-				args[4].PushBack(&x);
-				args[4].PushBack(&y);
+				args[7].PushBack(&x);
+				args[7].PushBack(&y);
 			}
 
-			object->Invoke(methodName, &result, args, 5);
+			object->Invoke(methodName, &result, args, 8);
 		}
 	}
 
@@ -147,12 +155,46 @@ namespace ScaleformVR
 		}
 	};
 
+	static float lerp(float start, float end, float percent)
+	{
+		return start + percent * end;
+	}
+
+	// Scaleform doesn't seem to provide access to any sort of RTC
+	// Provide one here, via clock(), which is supposed be backed by QueryPerformanceCounter since VC2015.
+	// See https://news.ycombinator.com/item?id=7924333
+	class VRInputScaleform_GetClock : public GFxFunctionHandler
+	{
+	public:
+		virtual void	Invoke(Args * args)
+		{
+			args->result->SetNumber(clock());
+		}
+	};
+
+	class VRInputScaleform_TriggerHapticPulse : public GFxFunctionHandler
+	{
+	public:
+		virtual void	Invoke(Args * args)
+		{
+			ASSERT(args->numArgs == 2);
+			int controllerRole = args->args[0].GetNumber();
+			double strength = args->args[1].GetNumber();
+
+			vr::IVRSystem* vrSystem = OpenVRHookMgr::GetInstance()->GetVRSystem();
+			vr::TrackedDeviceIndex_t deviceIndex = vrSystem->GetTrackedDeviceIndexForControllerRole((vr::ETrackedControllerRole)controllerRole);
+			vrSystem->TriggerHapticPulse(deviceIndex, 0, lerp(0, 3999, strength));
+		}
+	};
+
 	bool RegisterFuncs(GFxMovieView * view, GFxValue * plugin) {
 		//_MESSAGE("Registering scaleform functions");
 
 		RegisterFunction<VRInputScaleform_ShutoffButtonEventsToGame>(plugin, view, "ShutoffButtonEventsToGame");
 		RegisterFunction<VRInputScaleform_RegisterInputHandler>(plugin, view, "RegisterInputHandler");
 		RegisterFunction<VRInputScaleform_UnregisterInputHandler>(plugin, view, "UnregisterInputHandler");
+		RegisterFunction<VRInputScaleform_GetClock>(plugin, view, "GetClock");
+		RegisterFunction<VRInputScaleform_TriggerHapticPulse>(plugin, view, "TriggerHapticPulse");
 
 		return true;
 	}
